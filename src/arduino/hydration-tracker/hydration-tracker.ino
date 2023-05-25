@@ -6,11 +6,13 @@
 #include "fonts.h"
 #include "logo.h"
 
+//SCREEN
 #define SCREEN_ADDRESS 0x3C
 #define OLED_SDA 13
 #define OLED_SCK 14
 SSD1306 display(SCREEN_ADDRESS, OLED_SDA, OLED_SCK);
 
+//LEDRING
 #define RING_DATA_PIN 18
 #define LED_TYPE    WS2812B
 #define COLOR_ORDER GRB
@@ -18,11 +20,13 @@ SSD1306 display(SCREEN_ADDRESS, OLED_SDA, OLED_SCK);
 #define BRIGHTNESS 200
 CRGB ringLeds[NUM_LEDS];
 
+//LOAD CELL
 #define HX711_SCK 36
 #define HX711_DT 38
 #define LOAD_CELL_THRESHOLD 80000
 HX711 loadCell;
 
+//TIMER
 #define TIMER_CLK 40
 #define TIMER_DIO 39
 TM1637Display timer(TIMER_CLK, TIMER_DIO);
@@ -30,9 +34,16 @@ uint8_t TIMER_BLANK[4];
 
 #define READY_BUTTON_PIN 3
 
-bool glassPresent = false;
+//variables
 unsigned long glassPutOn = 0;
+unsigned long glassPut = 0;
+unsigned long currentMillis = 0;
 bool glassAnimationDone = false;
+bool glassAnimation = false;
+bool startTimer = false;
+bool glassStat = false;
+bool glassPresent = false;
+int value = 0;
 
 void setup() {
   Serial.begin(9600);
@@ -93,19 +104,50 @@ void setup() {
 void loop() {
   if(loadCell.is_ready()) {
     display.clear();
+    // creates the timer on the screen
+    if (startTimer) {
+      if (millis() >= currentMillis + 980) { //test whether the period has elapsed
+        currentMillis = millis();
+        glassPut += 1;
+      }
+    }
+    timer.showNumberDecEx(glassPut, 0b11111111, true, 4, 0);
     display.setTextAlignment(TEXT_ALIGN_LEFT);
-    int value = loadCell.get_value(1);
     display.drawString(0, 6, String(value));
     display.display();
-    bool glassStatus = abs(value) > LOAD_CELL_THRESHOLD;
-    if(glassStatus && !glassPresent) {
-      glassPutOn = millis();
-    }else if(!glassStatus && glassAnimationDone) {
-      glassAnimationDone = false;
+    value = loadCell.get_value(1);
+    
+    //handles if something is on loadcell
+    bool glassStatusPressed = abs(value) > LOAD_CELL_THRESHOLD;
+    bool glassStatusReleased = abs(value) < LOAD_CELL_THRESHOLD;
+    
+    //startTimer when you grab drink from machine
+    if(glassStatusReleased && glassStat){
+      startTimer = true;
+      glassPut = 0;
+      glassStat = false;
+      glassAnimation = true;
+      Serial.println("test");
     }
-    glassPresent = glassStatus;
+
+    //animation when you place it on and off
+    if(glassStatusPressed && !glassPresent) {
+      if (!startTimer) {
+        glassPutOn = millis();
+        glassStat = true;
+      }
+      if (startTimer) {
+        glassPutOn = millis();
+        startTimer = false;
+        glassAnimation = false;
+      }
+    }else if(!glassStatusPressed && glassAnimationDone) {
+    }
+    glassPresent = glassStatusPressed;
   }
-  if(glassPresent && !glassAnimationDone) {
+
+  //handles animations of the ledring
+  if(glassAnimation) {
     glassDetectedRingAnimation();
   }else{
     idleRingAnimation();
@@ -129,19 +171,33 @@ void idleRingAnimation() {
 }
 
 void glassDetectedRingAnimation() {
-  //show 2 opposite snakes of x LEDs slowly filling up a circle
+    //show a snake of x LEDs going round with a certain speed
   FastLED.clear();
-  int snakeSpeed = 40; //LEDs per second
-  unsigned long currentTime = millis() - glassPutOn;
-  int currentPosition = (currentTime / (1000 / snakeSpeed));
-  if(currentPosition >= NUM_LEDS / 2) {
-    glassAnimationDone = true;
-  }
-  for(int i = 0; i < NUM_LEDS / 2; i++) {
-    if(i <= currentPosition) {
-      ringLeds[i] = CRGB::Green;
-      ringLeds[NUM_LEDS - 1 - i] = CRGB::Green;
-    }
+  int trailLeds = 20;
+  int snakeSpeed = 70; //LEDs per second
+  unsigned long currentTime = millis();
+  int currentPosition = (currentTime / (1000 / snakeSpeed)) % NUM_LEDS;
+  for(int i = 0; i < trailLeds; i++) {
+    int led = (currentPosition - i + NUM_LEDS) % NUM_LEDS;
+    ringLeds[led] = CHSV(currentTime / 15 % 255, 255, 255);
+    byte fade = map(i, 0, trailLeds, 0, 255);
+    ringLeds[led].fadeToBlackBy(fade);
   }
   FastLED.show();
+
+  // //show 2 opposite snakes of x LEDs slowly filling up a circle
+  // FastLED.clear();
+  // int snakeSpeed = 40; //LEDs per second
+  // unsigned long currentTime = millis() - glassPutOn;
+  // int currentPosition = (currentTime / (1000 / snakeSpeed));
+  // // if(currentPosition >= NUM_LEDS / 2) {
+  // //   glassAnimationDone = true;
+  // // }
+  // for(int i = 0; i < NUM_LEDS / 2; i++) {
+  //   if(i <= currentPosition) {
+  //     ringLeds[i] = CRGB::Green;
+  //     ringLeds[NUM_LEDS - 1 - i] = CRGB::Green;
+  //   }
+  // }
+  // FastLED.show();
 }
