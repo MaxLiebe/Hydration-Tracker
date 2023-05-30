@@ -24,7 +24,7 @@ CRGB ringLeds[NUM_LEDS];
 //LOAD CELL
 #define HX711_SCK 5
 #define HX711_DT 3
-#define LOAD_CELL_THRESHOLD 80000
+#define LOAD_CELL_THRESHOLD 30000
 HX711 loadCell;
 
 //TIMER
@@ -41,11 +41,13 @@ uint8_t TIMER_BLANK[4];
 #define MINUTES_SECONDS 1
 
 //TIMER STATES
+#define BOOTING -1
 #define WAITING_FOR_THRESHOLD 0
 #define THRESHOLD_REACHED 1
 #define TIMER_RUNNING 2
 #define TIMER_STOPPED 3
 
+#define BOOT_TIME 4000
 #define ONE_MINUTE 60000
 
 //ANIMATION STATES
@@ -58,7 +60,7 @@ uint8_t TIMER_BLANK[4];
 
 //VARIABLES
 unsigned long timerStartedMs = 0;
-int timerState = WAITING_FOR_THRESHOLD;
+int timerState = BOOTING;
 int animationState = ANIMATION_BOOT;
 
 void setup() {
@@ -92,15 +94,20 @@ void setup() {
   display.drawXbm(0, 0, LOGO_WIDTH, LOGO_HEIGHT, LOGO_BITS);
   display.flipScreenVertically();
   display.display();
-
-  //wait a bit to show the splash screen
-  delay(500);
 }
 
 void loop() {
-  if(timerState == TIMER_RUNNING) {
-    unsigned long elapsed = millis() - timerStartedMs;
-    encodeMsToTimer(elapsed);
+  switch(timerState) {
+    case BOOTING:
+      if(millis() > BOOT_TIME) {
+        timerState = WAITING_FOR_THRESHOLD;
+        animationState = ANIMATION_IDLE;
+      }
+      break;
+    case TIMER_RUNNING:
+      unsigned long elapsed = millis() - timerStartedMs;
+      encodeMsToTimer(elapsed);
+      break;
   }
   
   if(loadCell.is_ready()) {
@@ -164,24 +171,25 @@ void loop() {
 
   //switch statement to manage what animation is being displayed on the LED ring
   switch(animationState) {
-    case ANIMATION_BOOT:
+    case ANIMATION_BOOT: {
       //fade in and out the green LED ring
-      for(int i = 2 * 255; i > 0; i--) {
-        fill_solid(ringLeds, NUM_LEDS, CRGB::Green);
-        fadeToBlackBy(ringLeds, NUM_LEDS, i < 255 ? 255 - i : i - 255);
-        FastLED.show();
-        delay(2);
-      }
-      animationState = ANIMATION_IDLE;
+      unsigned long currentTime = millis();
+      int fadeValue = 255 - (float)(abs((int)currentTime % 1000 - 500) / 500.0 * 255);
+      fill_solid(ringLeds, NUM_LEDS, CRGB::Green);
+      fadeToBlackBy(ringLeds, NUM_LEDS, fadeValue);
+      FastLED.show();
       break;
-    case ANIMATION_IDLE:
+    }
+    case ANIMATION_IDLE: {
       idleRingAnimation();
       break;
+    }
     case ANIMATION_TIMER_PRIMED:
       break;
-    case ANIMATION_TIMER_RUNNING:
+    case ANIMATION_TIMER_RUNNING: {
       glassDetectedRingAnimation();
-      break;
+      break; 
+    }
   }
 }
 
