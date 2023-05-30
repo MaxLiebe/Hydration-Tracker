@@ -3,7 +3,7 @@ A device that can keep track of your hydration!
 It uses a 1kg load cell to detect the presence (and possibly fullness) of one's glass or bottle, and can perform various actions based on that. 
 The main feature for the Hydration Tracker is keeping track of the time it takes for one to down their drink. The current list of planned and completed features is as follows:
 
-- [ ] Successfully detect the presence of a glass, and start/stop the timer accordingly.
+- [X] Successfully detect the presence of a glass, and start/stop the timer accordingly.
 - [ ] Using the button on the front, allow the user to select different modes (e.g. down a bottle, down a glass, down a bottle of Smirnoff Ice, etc.)
 - [ ] Different LED ring animations depending on which mode.
 - [ ] Allow the user to save the time it took to down a drink in a leaderboard.
