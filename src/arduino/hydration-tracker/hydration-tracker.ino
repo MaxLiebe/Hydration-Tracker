@@ -24,7 +24,7 @@ CRGB ringLeds[NUM_LEDS];
 //LOAD CELL
 #define HX711_SCK 5
 #define HX711_DT 3
-#define LOAD_CELL_THRESHOLD 80000
+#define LOAD_CELL_THRESHOLD 17000
 HX711 loadCell;
 
 //TIMER
@@ -41,17 +41,27 @@ uint8_t TIMER_BLANK[4];
 #define MINUTES_SECONDS 1
 
 //TIMER STATES
+#define BOOTING -1
 #define WAITING_FOR_THRESHOLD 0
 #define THRESHOLD_REACHED 1
 #define TIMER_RUNNING 2
 #define TIMER_STOPPED 3
 
+#define BOOT_TIME 4000
 #define ONE_MINUTE 60000
+
+//ANIMATION STATES
+#define ANIMATION_BOOT 0
+#define ANIMATION_IDLE 1
+#define ANIMATION_TIMER_PRIMED 2
+#define ANIMATION_TIMER_STARTED 3
+#define ANIMATION_TIMER_RUNNING 4
+#define ANIMATION_TIMER_STOPPED 5
 
 //VARIABLES
 unsigned long timerStartedMs = 0;
-int timerState = WAITING_FOR_THRESHOLD;
-bool glassAnimation = false;
+int timerState = BOOTING;
+int animationState = ANIMATION_BOOT;
 
 void setup() {
   Serial.begin(9600);
@@ -64,12 +74,11 @@ void setup() {
 
   //initialize the load cell
   loadCell.begin(HX711_DT, HX711_SCK);
-  loadCell.tare();
 
   //initialize the 7 segment timer
-  timer.setBrightness(0x0f);
-  timer.setSegments(TIMER_BLANK);
-
+  timer.setBrightness(0xff);
+  encodeMsToTimer(0);
+  
   //set the button to use the inbuilt pullup resistor
   pinMode(MODE_BUTTON_PIN, INPUT_PULLUP);
   
@@ -84,23 +93,25 @@ void setup() {
   display.drawXbm(0, 0, LOGO_WIDTH, LOGO_HEIGHT, LOGO_BITS);
   display.flipScreenVertically();
   display.display();
-
-  //wait a bit to show the splash screen
-  delay(1000);
-
-  //fade in and out the green LED ring
-  for(int i = 2 * 255; i > 0; i--) {
-    fill_solid(ringLeds, NUM_LEDS, CRGB::Green);
-    fadeToBlackBy(ringLeds, NUM_LEDS, i < 255 ? 255 - i : i - 255);
-    FastLED.show();
-    delay(6);
-  }
 }
 
 void loop() {
-  if(timerState == TIMER_RUNNING) {
-    unsigned long elapsed = millis() - timerStartedMs;
-    encodeMsToTimer(elapsed);
+  switch(timerState) {
+    case BOOTING:
+      if(millis() > BOOT_TIME) {
+        timerState = WAITING_FOR_THRESHOLD;
+        animationState = ANIMATION_IDLE;
+        loadCell.tare();
+        display.clear();
+        display.setTextAlignment(TEXT_ALIGN_CENTER);
+        display.drawString(64, 25, "Waiting for drink");
+        display.display();
+      }
+      break;
+    case TIMER_RUNNING:
+      unsigned long elapsed = millis() - timerStartedMs;
+      encodeMsToTimer(elapsed);
+      break;
   }
   
   if(loadCell.is_ready()) {
@@ -118,54 +129,68 @@ void loop() {
       case WAITING_FOR_THRESHOLD:
         if(thresholdMet) {
           timerState = THRESHOLD_REACHED;
+          animationState = ANIMATION_TIMER_PRIMED;
+          encodeMsToTimer(0);
+          display.clear();
+          display.setTextAlignment(TEXT_ALIGN_CENTER);
+          display.drawString(64, 25, "Ready?");
+          display.display();
         }
-        display.clear();
-        display.setTextAlignment(TEXT_ALIGN_LEFT);
-        display.drawString(0, 6, String(weightValue));
-        display.drawString(0, 20, "Waiting...");
-        display.display();
         break;
       case THRESHOLD_REACHED:
         if(!thresholdMet) {
           timerState = TIMER_RUNNING;
           timerStartedMs = millis();
-          glassAnimation = true;
+          animationState = ANIMATION_TIMER_RUNNING;
+          display.clear();
+          display.setTextAlignment(TEXT_ALIGN_CENTER);
+          display.drawString(64, 25, "Go!");
+          display.display();
         }
-        display.clear();
-        display.setTextAlignment(TEXT_ALIGN_LEFT);
-        display.drawString(0, 6, String(weightValue));
-        display.drawString(0, 20, "Reached");
-        display.display();
         break;
       case TIMER_RUNNING:
         if(thresholdMet) {
           timerState = TIMER_STOPPED;
-          glassAnimation = false;
+          animationState = ANIMATION_IDLE;
+          display.clear();
+          display.setTextAlignment(TEXT_ALIGN_CENTER);
+          display.drawString(64, 25, "DONE!");
+          display.display();
         }
-        display.clear();
-        display.setTextAlignment(TEXT_ALIGN_LEFT);
-        display.drawString(0, 6, String(weightValue));
-        display.drawString(0, 20, "Running");
-        display.display();
         break;
       case TIMER_STOPPED:
         if(!thresholdMet) {
           timerState = WAITING_FOR_THRESHOLD;
+          display.clear();
+          display.setTextAlignment(TEXT_ALIGN_CENTER);
+          display.drawString(64, 25, "Waiting for drink");
+          display.display();
         }
-        display.clear();
-        display.setTextAlignment(TEXT_ALIGN_LEFT);
-        display.drawString(0, 6, String(weightValue));
-        display.drawString(0, 20, "Stopped");
-        display.display();
         break;
     }
   }
 
-  //handles animations of the ledring
-  if(glassAnimation) {
-    glassDetectedRingAnimation();
-  }else{
-    idleRingAnimation();
+  //switch statement to manage what animation is being displayed on the LED ring
+  switch(animationState) {
+    case ANIMATION_BOOT: {
+      //fade in and out the green LED ring
+      unsigned long currentTime = millis();
+      int fadeValue = 255 - (float)(abs((int)currentTime % 1000 - 500) / 500.0 * 255);
+      fill_solid(ringLeds, NUM_LEDS, CRGB::Green);
+      fadeToBlackBy(ringLeds, NUM_LEDS, fadeValue);
+      FastLED.show();
+      break;
+    }
+    case ANIMATION_IDLE: {
+      idleRingAnimation();
+      break;
+    }
+    case ANIMATION_TIMER_PRIMED:
+      break;
+    case ANIMATION_TIMER_RUNNING: {
+      glassDetectedRingAnimation();
+      break; 
+    }
   }
 }
 
