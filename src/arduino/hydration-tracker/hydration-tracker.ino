@@ -1,3 +1,4 @@
+//IMPORT LIBRARIES
 #include <FastLED.h>
 #include "HX711.h"
 #include <TM1637Display.h>
@@ -8,12 +9,12 @@
 
 //SCREEN
 #define SCREEN_ADDRESS 0x3C
-#define OLED_SDA 13
-#define OLED_SCK 14
+#define OLED_SDA 16
+#define OLED_SCK 17
 SSD1306 display(SCREEN_ADDRESS, OLED_SDA, OLED_SCK);
 
-//LEDRING
-#define RING_DATA_PIN 18
+//LED RING
+#define RING_DATA_PIN 14
 #define LED_TYPE    WS2812B
 #define COLOR_ORDER GRB
 #define NUM_LEDS    24
@@ -21,29 +22,36 @@ SSD1306 display(SCREEN_ADDRESS, OLED_SDA, OLED_SCK);
 CRGB ringLeds[NUM_LEDS];
 
 //LOAD CELL
-#define HX711_SCK 36
-#define HX711_DT 38
+#define HX711_SCK 5
+#define HX711_DT 3
 #define LOAD_CELL_THRESHOLD 80000
 HX711 loadCell;
 
 //TIMER
-#define TIMER_CLK 40
-#define TIMER_DIO 39
+#define TIMER_CLK 2
+#define TIMER_DIO 1
 TM1637Display timer(TIMER_CLK, TIMER_DIO);
 uint8_t TIMER_BLANK[4];
 
-#define READY_BUTTON_PIN 3
+//MODE BUTTON
+#define MODE_BUTTON_PIN 3
 
-//variables
-unsigned long glassPutOn = 0;
-unsigned long glassPut = 0;
-unsigned long currentMillis = 0;
-bool glassAnimationDone = false;
+//TIMER MODES
+#define SECONDS_HUNDREDTHS 0
+#define MINUTES_SECONDS 1
+
+//TIMER STATES
+#define WAITING_FOR_THRESHOLD 0
+#define THRESHOLD_REACHED 1
+#define TIMER_RUNNING 2
+#define TIMER_STOPPED 3
+
+#define ONE_MINUTE 60000
+
+//VARIABLES
+unsigned long timerStartedMs = 0;
+int timerState = WAITING_FOR_THRESHOLD;
 bool glassAnimation = false;
-bool startTimer = false;
-bool glassStat = false;
-bool glassPresent = false;
-int value = 0;
 
 void setup() {
   Serial.begin(9600);
@@ -60,11 +68,10 @@ void setup() {
 
   //initialize the 7 segment timer
   timer.setBrightness(0x0f);
-  //timer.setSegments(TIMER_BLANK);
-  timer.showNumberDecEx(0, 0b11111111, true, 4, 0);
+  timer.setSegments(TIMER_BLANK);
 
   //set the button to use the inbuilt pullup resistor
-  pinMode(READY_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(MODE_BUTTON_PIN, INPUT_PULLUP);
   
   //init and clear the display
   Wire.begin(OLED_SDA, OLED_SCK);
@@ -92,7 +99,8 @@ void setup() {
     FastLED.show();
     delay(6);
   }
-  
+
+  //show startup instructions
   display.clear();
   display.setTextAlignment(TEXT_ALIGN_LEFT);
   display.drawString(0, 6, "1 Zet je glas neer");
@@ -102,48 +110,67 @@ void setup() {
 }
 
 void loop() {
+  if(timerState == TIMER_RUNNING) {
+    unsigned long elapsed = millis() - timerStartedMs;
+    encodeMsToTimer(elapsed);
+  }
+  
   if(loadCell.is_ready()) {
-    display.clear();
-    // creates the timer on the screen
-    if (startTimer) {
-      if (millis() >= currentMillis + 980) { //test whether the period has elapsed
-        currentMillis = millis();
-        glassPut += 1;
-      }
-    }
-    timer.showNumberDecEx(glassPut, 0b11111111, true, 4, 0);
-    display.setTextAlignment(TEXT_ALIGN_LEFT);
-    display.drawString(0, 6, String(value));
-    display.display();
-    value = loadCell.get_value(1);
+    int weightValue = loadCell.get_value(1);
+    //DEBUG show the load cell value on the display
+//    display.clear();
+//    display.setTextAlignment(TEXT_ALIGN_LEFT);
+//    display.drawString(0, 6, String(weightValue));
+//    display.display();
     
-    //handles if something is on loadcell
-    bool glassStatusPressed = abs(value) > LOAD_CELL_THRESHOLD;
-    bool glassStatusReleased = abs(value) < LOAD_CELL_THRESHOLD;
-    
-    //startTimer when you grab drink from machine
-    if(glassStatusReleased && glassStat){
-      startTimer = true;
-      glassPut = 0;
-      glassStat = false;
-      glassAnimation = true;
-      Serial.println("test");
-    }
+    //becomes true if something is detected on the load cell (the weight is above the threshold)
+    bool thresholdMet = abs(weightValue) > LOAD_CELL_THRESHOLD;
 
-    //animation when you place it on and off
-    if(glassStatusPressed && !glassPresent) {
-      if (!startTimer) {
-        glassPutOn = millis();
-        glassStat = true;
-      }
-      if (startTimer) {
-        glassPutOn = millis();
-        startTimer = false;
-        glassAnimation = false;
-      }
-    }else if(!glassStatusPressed && glassAnimationDone) {
+    switch(timerState) {
+      case WAITING_FOR_THRESHOLD:
+        if(thresholdMet) {
+          timerState = THRESHOLD_REACHED;
+        }
+        display.clear();
+        display.setTextAlignment(TEXT_ALIGN_LEFT);
+        display.drawString(0, 6, String(weightValue));
+        display.drawString(0, 20, "Waiting...");
+        display.display();
+        break;
+      case THRESHOLD_REACHED:
+        if(!thresholdMet) {
+          timerState = TIMER_RUNNING;
+          timerStartedMs = millis();
+          glassAnimation = true;
+        }
+        display.clear();
+        display.setTextAlignment(TEXT_ALIGN_LEFT);
+        display.drawString(0, 6, String(weightValue));
+        display.drawString(0, 20, "Reached");
+        display.display();
+        break;
+      case TIMER_RUNNING:
+        if(thresholdMet) {
+          timerState = TIMER_STOPPED;
+          glassAnimation = false;
+        }
+        display.clear();
+        display.setTextAlignment(TEXT_ALIGN_LEFT);
+        display.drawString(0, 6, String(weightValue));
+        display.drawString(0, 20, "Running");
+        display.display();
+        break;
+      case TIMER_STOPPED:
+        if(!thresholdMet) {
+          timerState = WAITING_FOR_THRESHOLD;
+        }
+        display.clear();
+        display.setTextAlignment(TEXT_ALIGN_LEFT);
+        display.drawString(0, 6, String(weightValue));
+        display.drawString(0, 20, "Stopped");
+        display.display();
+        break;
     }
-    glassPresent = glassStatusPressed;
   }
 
   //handles animations of the ledring
@@ -152,6 +179,31 @@ void loop() {
   }else{
     idleRingAnimation();
   }
+}
+
+void encodeMsToTimer(unsigned long ms) {
+  //create an array to store the digits in
+  uint8_t segments[4];
+
+  //decide what mode to use for the timer based on how much time has elapsed
+  int timerMode = ms < ONE_MINUTE ? SECONDS_HUNDREDTHS : MINUTES_SECONDS;
+
+  //timerMode is an int, so we'll use a switch statement to accomodate for different modes
+  //for expandability, we have opted not to just use a boolean here
+  switch(timerMode) {
+    case SECONDS_HUNDREDTHS:
+      //extract the seconds and the hundredths from the milliseconds
+      int seconds = ms / 1000;
+      int hundredths = (ms - (seconds * 1000)) / 10;
+
+      //update the segments with the correct digits
+      segments[0] = timer.encodeDigit(seconds / 10);
+      segments[1] = timer.encodeDigit(seconds % 10) | 0x80; //OR-ing with 0x80 to turn on the :
+      segments[2] = timer.encodeDigit(hundredths / 10);
+      segments[3] = timer.encodeDigit(hundredths % 10);
+      break; 
+  }
+  timer.setSegments(segments);
 }
 
 void idleRingAnimation() {
