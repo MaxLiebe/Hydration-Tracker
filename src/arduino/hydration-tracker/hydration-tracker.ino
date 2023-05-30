@@ -75,17 +75,13 @@ void setup() {
   
   //init and clear the display
   Wire.begin(OLED_SDA, OLED_SCK);
+  display.setColor(WHITE);
+  display.setFont(Roboto_Black_14);
   display.init();
   display.clear();
 
   //show the splash screen
-  display.drawXbm(2, 2, LOGO_WIDTH, LOGO_HEIGHT, LOGO_BITS);
-  display.setFont(Roboto_Black_22);
-  display.setTextAlignment(TEXT_ALIGN_RIGHT);
-  display.setColor(WHITE);
-  display.drawString(128, 14, "KLOK-");
-  display.setFont(Roboto_Black_14);
-  display.drawString(128, 42, "KLOKKER");
+  display.drawXbm(0, 0, LOGO_WIDTH, LOGO_HEIGHT, LOGO_BITS);
   display.flipScreenVertically();
   display.display();
 
@@ -99,14 +95,6 @@ void setup() {
     FastLED.show();
     delay(6);
   }
-
-  //show startup instructions
-  display.clear();
-  display.setTextAlignment(TEXT_ALIGN_LEFT);
-  display.drawString(0, 6, "1 Zet je glas neer");
-  display.drawString(0, 24, "2 Druk op \"klaar\"");
-  display.drawString(0, 42, "3 Trek een bak!");
-  display.display();
 }
 
 void loop() {
