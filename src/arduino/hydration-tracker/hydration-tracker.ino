@@ -48,10 +48,18 @@ uint8_t TIMER_BLANK[4];
 
 #define ONE_MINUTE 60000
 
+//ANIMATION STATES
+#define ANIMATION_BOOT 0
+#define ANIMATION_IDLE 1
+#define ANIMATION_TIMER_PRIMED 2
+#define ANIMATION_TIMER_STARTED 3
+#define ANIMATION_TIMER_RUNNING 4
+#define ANIMATION_TIMER_STOPPED 5
+
 //VARIABLES
 unsigned long timerStartedMs = 0;
 int timerState = WAITING_FOR_THRESHOLD;
-bool glassAnimation = false;
+int animationState = ANIMATION_BOOT;
 
 void setup() {
   Serial.begin(9600);
@@ -67,9 +75,9 @@ void setup() {
   loadCell.tare();
 
   //initialize the 7 segment timer
-  timer.setBrightness(0x0f);
-  timer.setSegments(TIMER_BLANK);
-
+  timer.setBrightness(0xff);
+  encodeMsToTimer(0);
+  
   //set the button to use the inbuilt pullup resistor
   pinMode(MODE_BUTTON_PIN, INPUT_PULLUP);
   
@@ -90,15 +98,7 @@ void setup() {
   display.display();
 
   //wait a bit to show the splash screen
-  delay(1000);
-
-  //fade in and out the green LED ring
-  for(int i = 2 * 255; i > 0; i--) {
-    fill_solid(ringLeds, NUM_LEDS, CRGB::Green);
-    fadeToBlackBy(ringLeds, NUM_LEDS, i < 255 ? 255 - i : i - 255);
-    FastLED.show();
-    delay(6);
-  }
+  delay(500);
 
   //show startup instructions
   display.clear();
@@ -130,6 +130,7 @@ void loop() {
       case WAITING_FOR_THRESHOLD:
         if(thresholdMet) {
           timerState = THRESHOLD_REACHED;
+          animationState = ANIMATION_TIMER_PRIMED;
         }
         display.clear();
         display.setTextAlignment(TEXT_ALIGN_LEFT);
@@ -141,7 +142,7 @@ void loop() {
         if(!thresholdMet) {
           timerState = TIMER_RUNNING;
           timerStartedMs = millis();
-          glassAnimation = true;
+          animationState = ANIMATION_TIMER_RUNNING;
         }
         display.clear();
         display.setTextAlignment(TEXT_ALIGN_LEFT);
@@ -152,7 +153,7 @@ void loop() {
       case TIMER_RUNNING:
         if(thresholdMet) {
           timerState = TIMER_STOPPED;
-          glassAnimation = false;
+          animationState = ANIMATION_IDLE;
         }
         display.clear();
         display.setTextAlignment(TEXT_ALIGN_LEFT);
@@ -173,11 +174,26 @@ void loop() {
     }
   }
 
-  //handles animations of the ledring
-  if(glassAnimation) {
-    glassDetectedRingAnimation();
-  }else{
-    idleRingAnimation();
+  //switch statement to manage what animation is being displayed on the LED ring
+  switch(animationState) {
+    case ANIMATION_BOOT:
+      //fade in and out the green LED ring
+      for(int i = 2 * 255; i > 0; i--) {
+        fill_solid(ringLeds, NUM_LEDS, CRGB::Green);
+        fadeToBlackBy(ringLeds, NUM_LEDS, i < 255 ? 255 - i : i - 255);
+        FastLED.show();
+        delay(2);
+      }
+      animationState = ANIMATION_IDLE;
+      break;
+    case ANIMATION_IDLE:
+      idleRingAnimation();
+      break;
+    case ANIMATION_TIMER_PRIMED:
+      break;
+    case ANIMATION_TIMER_RUNNING:
+      glassDetectedRingAnimation();
+      break;
   }
 }
 
