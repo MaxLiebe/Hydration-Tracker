@@ -24,7 +24,7 @@ CRGB ringLeds[NUM_LEDS];
 //LOAD CELL
 #define HX711_SCK 5
 #define HX711_DT 3
-#define LOAD_CELL_THRESHOLD 30000
+#define LOAD_CELL_THRESHOLD 17000
 HX711 loadCell;
 
 //TIMER
@@ -74,7 +74,6 @@ void setup() {
 
   //initialize the load cell
   loadCell.begin(HX711_DT, HX711_SCK);
-  loadCell.tare();
 
   //initialize the 7 segment timer
   timer.setBrightness(0xff);
@@ -102,6 +101,11 @@ void loop() {
       if(millis() > BOOT_TIME) {
         timerState = WAITING_FOR_THRESHOLD;
         animationState = ANIMATION_IDLE;
+        loadCell.tare();
+        display.clear();
+        display.setTextAlignment(TEXT_ALIGN_CENTER);
+        display.drawString(64, 25, "Waiting for drink");
+        display.display();
       }
       break;
     case TIMER_RUNNING:
@@ -126,45 +130,42 @@ void loop() {
         if(thresholdMet) {
           timerState = THRESHOLD_REACHED;
           animationState = ANIMATION_TIMER_PRIMED;
+          encodeMsToTimer(0);
+          display.clear();
+          display.setTextAlignment(TEXT_ALIGN_CENTER);
+          display.drawString(64, 25, "Ready?");
+          display.display();
         }
-        display.clear();
-        display.setTextAlignment(TEXT_ALIGN_LEFT);
-        display.drawString(0, 6, String(weightValue));
-        display.drawString(0, 20, "Waiting...");
-        display.display();
         break;
       case THRESHOLD_REACHED:
         if(!thresholdMet) {
           timerState = TIMER_RUNNING;
           timerStartedMs = millis();
           animationState = ANIMATION_TIMER_RUNNING;
+          display.clear();
+          display.setTextAlignment(TEXT_ALIGN_CENTER);
+          display.drawString(64, 25, "Go!");
+          display.display();
         }
-        display.clear();
-        display.setTextAlignment(TEXT_ALIGN_LEFT);
-        display.drawString(0, 6, String(weightValue));
-        display.drawString(0, 20, "Reached");
-        display.display();
         break;
       case TIMER_RUNNING:
         if(thresholdMet) {
           timerState = TIMER_STOPPED;
           animationState = ANIMATION_IDLE;
+          display.clear();
+          display.setTextAlignment(TEXT_ALIGN_CENTER);
+          display.drawString(64, 25, "DONE!");
+          display.display();
         }
-        display.clear();
-        display.setTextAlignment(TEXT_ALIGN_LEFT);
-        display.drawString(0, 6, String(weightValue));
-        display.drawString(0, 20, "Running");
-        display.display();
         break;
       case TIMER_STOPPED:
         if(!thresholdMet) {
           timerState = WAITING_FOR_THRESHOLD;
+          display.clear();
+          display.setTextAlignment(TEXT_ALIGN_CENTER);
+          display.drawString(64, 25, "Waiting for drink");
+          display.display();
         }
-        display.clear();
-        display.setTextAlignment(TEXT_ALIGN_LEFT);
-        display.drawString(0, 6, String(weightValue));
-        display.drawString(0, 20, "Stopped");
-        display.display();
         break;
     }
   }
