@@ -4,6 +4,11 @@
 #include <TM1637Display.h>
 #include <Wire.h>
 #include <SSD1306.h>
+#include <qrcodeoled.h>
+#include <WiFi.h>
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
+
 #include "fonts.h"
 #include "logo.h"
 
@@ -11,7 +16,8 @@
 #define SCREEN_ADDRESS 0x3C
 #define OLED_SDA 16
 #define OLED_SCK 17
-SSD1306 display(SCREEN_ADDRESS, OLED_SDA, OLED_SCK);
+SSD1306 display(SCREEN_ADDRESS, OLED_SDA, OLED_SCK, GEOMETRY_128_64);
+QRcodeOled qrcode(&display);
 
 //LED RING
 #define RING_DATA_PIN 14
@@ -58,12 +64,25 @@ uint8_t TIMER_BLANK[4];
 #define ANIMATION_TIMER_RUNNING 4
 #define ANIMATION_TIMER_STOPPED 5
 
+//WIFI CREDENTIALS FOR LEADERBOARD
+const char* ssid = "HydrationTracker";
+const char* password = "drinkwater";
+
+//WIFI SERVER
+WiFiServer server(80);
+String header;
+
 //VARIABLES
 unsigned long timerStartedMs = 0;
+unsigned long timeElapsed = 0;
 int timerState = BOOTING;
 int animationState = ANIMATION_BOOT;
 
+String secrets[10];
+
 void setup() {
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+  
   Serial.begin(9600);
 
   //initialize the LED ring with FastLED, and turn off all the LEDs
@@ -87,12 +106,24 @@ void setup() {
   display.setColor(WHITE);
   display.setFont(Roboto_Black_14);
   display.init();
+  qrcode.init();
   display.clear();
 
   //show the splash screen
   display.drawXbm(0, 0, LOGO_WIDTH, LOGO_HEIGHT, LOGO_BITS);
   display.flipScreenVertically();
   display.display();
+
+  WiFi.mode(WIFI_STA);
+  IPAddress Ip(4, 3, 2, 1);
+  IPAddress NMask(255, 255, 255, 0);
+  WiFi.softAPConfig(Ip, Ip, NMask);
+  Serial.print("Setting AP (Access Point)…");
+  WiFi.softAP(ssid, password);
+  IPAddress IP = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.println(IP);
+  server.begin();
 }
 
 void loop() {
@@ -109,8 +140,8 @@ void loop() {
       }
       break;
     case TIMER_RUNNING:
-      unsigned long elapsed = millis() - timerStartedMs;
-      encodeMsToTimer(elapsed);
+      timeElapsed = millis() - timerStartedMs;
+      encodeMsToTimer(timeElapsed);
       break;
   }
   
@@ -161,10 +192,15 @@ void loop() {
       case TIMER_STOPPED:
         if(!thresholdMet) {
           timerState = WAITING_FOR_THRESHOLD;
-          display.clear();
-          display.setTextAlignment(TEXT_ALIGN_CENTER);
-          display.drawString(64, 25, "Waiting for drink");
-          display.display();
+          char buf[20];
+          itoa(timeElapsed, buf, 10);
+          char secret[10];
+          generateRandomSecret(secret, 10);
+          for(int i = 1; i < 10; i++) {
+            secrets[i] = secrets[i - 1];
+          }
+          secrets[0] = String(secret);
+          qrcode.create("https://www.adttimer.nl/?t=" + String(buf) + "&s=" + secrets[0]);
         }
         break;
     }
@@ -192,6 +228,63 @@ void loop() {
       break; 
     }
   }
+
+  WiFiClient client = server.available();   // Listen for incoming clients
+
+  if (client) {                             // If a new client connects,
+    Serial.println("New Client.");          // print a message out in the serial port
+    String currentLine = "";                // make a String to hold incoming data from the client
+    while (client.connected()) {            // loop while the client's connected
+      if (client.available()) {             // if there's bytes to read from the client,
+        char c = client.read();             // read a byte, then
+        Serial.write(c);                    // print it out the serial monitor
+        header += c;
+        if (c == '\n') {                    // if the byte is a newline character
+          // if the current line is blank, you got two newline characters in a row.
+          // that's the end of the client HTTP request, so send a response:
+          if (currentLine.length() == 0) {
+            // HTTP headers always start with a response code (e.g. HTTP/1.1 200 OK)
+            // and a content-type so the client knows what's coming, then a blank line:
+            client.println("HTTP/1.1 200 OK");
+            client.println("Content-type:text/html");
+            client.println("Connection: close");
+            client.println();
+
+            // Display the HTML web page
+            client.println("<!DOCTYPE html><html>");
+            client.println("<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
+            client.println("<link rel=\"icon\" href=\"data:,\">");
+            // CSS to style the on/off buttons 
+            // Feel free to change the background-color and font-size attributes to fit your preferences
+            client.println("<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}");
+            client.println(".button { background-color: #4CAF50; border: none; color: white; padding: 16px 40px;");
+            client.println("text-decoration: none; font-size: 30px; margin: 2px; cursor: pointer;}");
+            client.println(".button2 {background-color: #555555;}</style></head>");
+            
+            // Web Page Heading
+            client.println("<body><h1>ESP32 Web Server</h1>");
+
+            client.println("</body></html>");
+            
+            // The HTTP response ends with another blank line
+            client.println();
+            // Break out of the while loop
+            break;
+          } else { // if you got a newline, then clear currentLine
+            currentLine = "";
+          }
+        } else if (c != '\r') {  // if you got anything else but a carriage return character,
+          currentLine += c;      // add it to the end of the currentLine
+        }
+      }
+    }
+    // Clear the header variable
+    header = "";
+    // Close the connection
+    client.stop();
+    Serial.println("Client disconnected.");
+    Serial.println("");
+  }
 }
 
 void encodeMsToTimer(unsigned long ms) {
@@ -217,6 +310,17 @@ void encodeMsToTimer(unsigned long ms) {
       break; 
   }
   timer.setSegments(segments);
+}
+
+void generateRandomSecret(char* buf, int l) {
+  for(int i = 0; i < l; i++) {
+    byte randomValue = random(0, 37);
+    char letter = randomValue + 'a';
+    if(randomValue > 26) {
+      letter = (randomValue - 26) + '0';
+    }
+    buf[i] = letter;
+  }
 }
 
 void idleRingAnimation() {
