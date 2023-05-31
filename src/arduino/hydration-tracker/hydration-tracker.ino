@@ -34,7 +34,7 @@ TM1637Display timer(TIMER_CLK, TIMER_DIO);
 uint8_t TIMER_BLANK[4];
 
 //MODE BUTTON
-#define MODE_BUTTON_PIN 3
+#define MODE_BUTTON_PIN 34
 
 //TIMER MODES
 #define SECONDS_HUNDREDTHS 0
@@ -58,10 +58,21 @@ uint8_t TIMER_BLANK[4];
 #define ANIMATION_TIMER_RUNNING 4
 #define ANIMATION_TIMER_STOPPED 5
 
+//MODE STATES
+#define NUMBER_OF_MODES 3
+#define BEER 0
+#define SHOT 1
+#define WATER 2
+
 //VARIABLES
 unsigned long timerStartedMs = 0;
 int timerState = BOOTING;
+int modeState = BEER;
 int animationState = ANIMATION_BOOT;
+int numberOfModes = NUMBER_OF_MODES;
+
+long lastDebounceTime = 0;  // the last time the output pin was toggled
+long debounceDelay = 200;    // the debounce time; increase if the output flickers
 
 void setup() {
   Serial.begin(9600);
@@ -96,6 +107,31 @@ void setup() {
 }
 
 void loop() {
+  // Serial.println(digitalRead(MODE_BUTTON_PIN));
+  // int buttonS = digitalRead(MODE_BUTTON_PIN);
+  if (modeState > numberOfModes-1) {
+    buttonState = 0;
+  }
+  if ( (millis() - lastDebounceTime) > debounceDelay) {
+    if (digitalRead(MODE_BUTTON_PIN) == 0) {
+      lastDebounceTime = millis(); //set the current time
+      modeState +=1;
+    }
+  }
+
+  switch(modeState) {
+    case BEER:
+      Serial.println("beer");
+      break;
+    case SHOT:
+      Serial.println("shot");
+      break;
+    case WATER:
+      Serial.println("water");
+      break;
+  }
+
+
   switch(timerState) {
     case BOOTING:
       if(millis() > BOOT_TIME) {
@@ -249,20 +285,22 @@ void glassDetectedRingAnimation() {
     ringLeds[led].fadeToBlackBy(fade);
   }
   FastLED.show();
+}
 
-  // //show 2 opposite snakes of x LEDs slowly filling up a circle
-  // FastLED.clear();
-  // int snakeSpeed = 40; //LEDs per second
-  // unsigned long currentTime = millis() - glassPutOn;
-  // int currentPosition = (currentTime / (1000 / snakeSpeed));
-  // // if(currentPosition >= NUM_LEDS / 2) {
-  // //   glassAnimationDone = true;
-  // // }
-  // for(int i = 0; i < NUM_LEDS / 2; i++) {
-  //   if(i <= currentPosition) {
-  //     ringLeds[i] = CRGB::Green;
-  //     ringLeds[NUM_LEDS - 1 - i] = CRGB::Green;
-  //   }
+void modusSwitch() {
+  //show 2 opposite snakes of x LEDs slowly filling up a circle
+  FastLED.clear();
+  int snakeSpeed = 40; //LEDs per second
+  unsigned long currentTime = millis() - glassPutOn;
+  int currentPosition = (currentTime / (1000 / snakeSpeed));
+  // if(currentPosition >= NUM_LEDS / 2) {
+  //   glassAnimationDone = true;
   // }
-  // FastLED.show();
+  for(int i = 0; i < NUM_LEDS / 2; i++) {
+    if(i <= currentPosition) {
+      ringLeds[i] = CRGB::Green;
+      ringLeds[NUM_LEDS - 1 - i] = CRGB::Green;
+    }
+  }
+  FastLED.show();
 }
