@@ -8,6 +8,8 @@
 #include <WiFi.h>
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
+#include "SD.h"
+#include "SPI.h"
 
 #include "fonts.h"
 #include "logo.h"
@@ -30,7 +32,10 @@ CRGB ringLeds[NUM_LEDS];
 //LOAD CELL
 #define HX711_SCK 5
 #define HX711_DT 3
-#define LOAD_CELL_THRESHOLD 17000
+//#define LOAD_CELL_CALIBRATED_VALUE -397700 //to get this value, read the value of the load cell when nothing is on it using the debug code below (lid needs to be screwed in)
+#define LOAD_CELL_CALIBRATED_VALUE -374700 //lower value for testing when the lid is not on
+//#define LOAD_CELL_THRESHOLD 17000 //can be calibrated yourself. we'd recommend leaving it at this value
+#define LOAD_CELL_THRESHOLD 50000 //different value for testing when the lid is not on
 HX711 loadCell;
 
 //TIMER
@@ -38,6 +43,13 @@ HX711 loadCell;
 #define TIMER_DIO 1
 TM1637Display timer(TIMER_CLK, TIMER_DIO);
 uint8_t TIMER_BLANK[4];
+
+//SD Card
+#define SD_CS_PIN        12
+#define SD_CLK_PIN       11
+#define SD_MOSI_PIN      9
+#define SD_MISO_PIN      7
+#define MHz 1000000
 
 //MODE BUTTON
 #define MODE_BUTTON_PIN 3
@@ -84,7 +96,6 @@ void setup() {
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
   
   Serial.begin(9600);
-
   //initialize the LED ring with FastLED, and turn off all the LEDs
   FastLED.addLeds<LED_TYPE, RING_DATA_PIN, COLOR_ORDER>(ringLeds, NUM_LEDS).setCorrection(TypicalLEDStrip);
   FastLED.setBrightness(BRIGHTNESS);
@@ -124,6 +135,14 @@ void setup() {
   Serial.print("AP IP address: ");
   Serial.println(IP);
   server.begin();
+
+  pinMode(SD_CS_PIN, OUTPUT); // SS
+
+  SPIClass spiSD = SPIClass(VSPI); // Neither HSPI nor VSPI seem to work
+  spiSD.begin(SD_CLK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN); 
+
+  if (!SD.begin(SD_CS_PIN, spiSD))//, 1 * MHz)) - no freq work: 1, 25, 40, 50, 80 MHz
+    Serial.println("we gaming");
 }
 
 void loop() {
@@ -132,10 +151,23 @@ void loop() {
       if(millis() > BOOT_TIME) {
         timerState = WAITING_FOR_THRESHOLD;
         animationState = ANIMATION_IDLE;
-        loadCell.tare();
         display.clear();
         display.setTextAlignment(TEXT_ALIGN_CENTER);
         display.drawString(64, 25, "Waiting for drink");
+        switch(SD.cardType()) {
+          case CARD_NONE: {
+            display.drawString(64, 50, "F");
+            break;
+          }
+          case CARD_SD: {
+            display.drawString(64, 50, "Let's go");
+            break;
+          }
+          case CARD_SDHC: {
+            display.drawString(64, 50, "Let's goo");
+            break;
+          }
+        }
         display.display();
       }
       break;
@@ -154,7 +186,7 @@ void loop() {
 //    display.display();
     
     //becomes true if something is detected on the load cell (the weight is above the threshold)
-    bool thresholdMet = abs(weightValue) > LOAD_CELL_THRESHOLD;
+    bool thresholdMet = abs(weightValue) > abs(LOAD_CELL_CALIBRATED_VALUE) + LOAD_CELL_THRESHOLD || abs(weightValue) < abs(LOAD_CELL_CALIBRATED_VALUE) - LOAD_CELL_THRESHOLD;
 
     switch(timerState) {
       case WAITING_FOR_THRESHOLD:
@@ -200,7 +232,7 @@ void loop() {
             secrets[i] = secrets[i - 1];
           }
           secrets[0] = String(secret);
-          qrcode.create("https://www.adttimer.nl/?t=" + String(buf) + "&s=" + secrets[0]);
+          qrcode.create("http://4.3.2.1?t=" + String(buf) + "&s=" + secrets[0]);
         }
         break;
     }
