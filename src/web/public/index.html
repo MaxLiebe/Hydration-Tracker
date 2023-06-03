@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div id="overlay">
+      <div id="dialog">
+        <span>YOU GOT A TIME OF</span>
+        <span id="dialog-time" class="dialog-value">00:00</span>
+        <span>IN THE CATEGORY </span>
+        <span id="dialog-category" class="dialog-value">Normal beer</span>
+        <span>Enter your name to save this time to the leaderboard!</span>
+        <form onsubmit="return false">
+          <input id="dialog-name" required placeholder="The Adtmeister"/>
+          <button id="save-button" class="button" onclick="saveTime()">Save time!</button>
+          <button id="close-button" type="button" class="button" onclick="hideOverlay()">Don't save</button>
+        </form>
+      </div>>
+    </div>
+    <main>
+      <div id="header">
+        <h1>Time leaderboard</h1>
+      </div>
+      <div id="leaderboard">
+        <div class="ribbon"></div>
+        <table id="leaderboard-table">
+          <tbody></tbody>
+          <!-- This is where the leaderboard entries go :) -->
+        </table>
+      </div>
+    </main>
+    <script src="main.js"></script>
+  </body>
+</html>
