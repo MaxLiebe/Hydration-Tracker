@@ -7,7 +7,7 @@ The main feature for the Hydration Tracker is keeping track of the time it takes
 - [ ] Using the button on the front, allow the user to select different modes (e.g. down a bottle, down a glass, down a bottle of Smirnoff Ice, etc.)
 - [ ] Different LED ring animations depending on which mode.
 - [ ] Allow the user to save the time it took to down a drink in a leaderboard.
-- [ ] Host a web page for entering a leaderboard score.
+- [X] Host a web page for entering a leaderboard score.
 - [ ] Detect how full a glass is for games like "Pannetje-Pannetje" or a "Pitcheradt" (likely difficult to implement)
 
 More features may be implemented if the hardware allows it! If you have any suggestions, please suggest them as an [issue](https://github.com/MaxLiebe/Hydration-Tracker/issues/new).
