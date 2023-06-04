@@ -11,9 +11,13 @@
 #include "FS.h"
 #include "SD.h"
 #include "SPI.h"
+#include <EEPROM.h>
 
 #include "fonts.h"
 #include "logo.h"
+
+//Use debug mode?
+//#define DEBUG //uncomment if you want to use debug mode (for calibration)
 
 //SCREEN
 #define SCREEN_ADDRESS 0x3C
@@ -23,7 +27,7 @@ SSD1306 display(SCREEN_ADDRESS, OLED_SDA, OLED_SCK, GEOMETRY_128_64);
 QRcodeOled qrcode(&display);
 
 //LED RING
-#define RING_DATA_PIN 18  //M14 A18
+#define RING_DATA_PIN 14
 #define LED_TYPE WS2812B
 #define COLOR_ORDER GRB
 #define NUM_LEDS 24
@@ -34,15 +38,14 @@ CRGB ringLeds[NUM_LEDS];
 //LOAD CELL
 #define HX711_SCK 5
 #define HX711_DT 3
-//#define LOAD_CELL_CALIBRATED_VALUE -397700 //to get this value, read the value of the load cell when nothing is on it using the debug code below (lid needs to be screwed in)
-#define LOAD_CELL_CALIBRATED_VALUE -374700 //lower value for testing when the lid is not on
-//#define LOAD_CELL_THRESHOLD 17000 //can be calibrated yourself. we'd recommend leaving it at this value
-#define LOAD_CELL_THRESHOLD 50000 //different value for testing when the lid is not on
+#define LOAD_CELL_THRESHOLD 10000 //can be calibrated yourself. we'd recommend leaving it at this value
+// #define LOAD_CELL_THRESHOLD 50000 //different value for testing when the lid is not on
+#define CALIBRATE_VALUE_TIME 2000
 HX711 loadCell;
 
 //TIMER
-#define TIMER_CLK 40  //M2 A40
-#define TIMER_DIO 39  //M1 A39
+#define TIMER_CLK 2
+#define TIMER_DIO 1
 TM1637Display timer(TIMER_CLK, TIMER_DIO);
 uint8_t TIMER_BLANK[4];
 
@@ -55,7 +58,7 @@ uint8_t TIMER_BLANK[4];
 SPIClass spi = SPIClass(HSPI);
 
 //MODE BUTTON
-#define MODE_BUTTON_PIN 1  //M34 A1
+#define MODE_BUTTON_PIN 34
 
 //TIMER MODES
 #define SECONDS_HUNDREDTHS 0
@@ -70,6 +73,7 @@ SPIClass spi = SPIClass(HSPI);
 
 #define BOOT_TIME 4000
 #define ONE_MINUTE 60000
+#define MINIMUM_TIME 200
 
 //ANIMATION STATES
 #define ANIMATION_BOOT 0
@@ -85,11 +89,20 @@ SPIClass spi = SPIClass(HSPI);
 
 #define PULSE_DURATION 1000  // Duration of the pulse in milliseconds
 
+//EEPROM
+#define EEPROM_SIZE 4 //4 bytes to save the calibrated value long
+
 //MODE STATES
 #define NUMBER_OF_MODES 3
-#define BEER 0
-#define SHOT 1
-#define WATER 2
+const String modes[NUMBER_OF_MODES] = {
+  "beer_glass", "beer_rietadt", "ice"
+};
+const String modeNames[NUMBER_OF_MODES] = {
+  "Beer out \n of glass", "Beer with \n straw", "Schmirnoff \n Ice"
+};
+const uint32_t modeColors[NUMBER_OF_MODES] = {
+  CRGB::Yellow, CRGB::Green, CRGB::LightBlue
+};
 
 //WIFI CREDENTIALS FOR LEADERBOARD
 const char* ssid = "HydrationTracker";
@@ -104,20 +117,19 @@ unsigned long timerStartedMs = 0;
 unsigned long timeElapsed = 0;
 unsigned long animationStarted = 0;
 int timerState = BOOTING;
-int modeState = BEER;
+int modeState = 0;
 int animationState = ANIMATION_BOOT;
 bool leaderboardEnabled = true;
 
 String secrets[10];
 
-int numberOfModes = NUMBER_OF_MODES;
 bool pulseActive = true;
-String typeOfDrink = "beer";
+bool canSwitchMode = true;
+bool showQR = false;
 String drinkStatus = "Waiting for drink";
-bool pressButton = true;
 
-long lastDebounceTime = 0;  // the last time the output pin was toggled
-long debounceDelay = 200;   // the debounce time; increase if the output flickers
+unsigned long lastDebounceTime = 0;  // the last time the output pin was toggled
+unsigned long debounceDelay = 200;   // the debounce time; increase if the output flickers
 
 // Define the current brightness and pulsation direction
 uint8_t minBrightnessDrinking = MIN_BRIGHTNESS;
@@ -126,6 +138,9 @@ int8_t pulsationDirectionDrinking = 1;
 // Define variables for timing
 unsigned long previousMillisDrinking = 0;
 unsigned long intervalDrinking = ANIMATION_SPEED_DRINKING;
+
+long calibratedWeightValue = 0;
+unsigned long calibrateTimer = 0;
 
 void setup() {
   Serial.begin(9600);
@@ -182,43 +197,46 @@ void setup() {
   server.serveStatic("/", SD, "/");
   
   server.begin();
+
+  EEPROM.begin(EEPROM_SIZE);
+  EEPROM.get(0, calibratedWeightValue);
 }
 
 void loop() {
-  display.setTextAlignment(TEXT_ALIGN_CENTER);
-  display.clear();
-  display.drawString(64, 12, drinkStatus);
-  display.drawString(64, 30, typeOfDrink);
-  display.display();
-  if (pressButton) {
-    if ((millis() - lastDebounceTime) > debounceDelay) {
-      if (digitalRead(MODE_BUTTON_PIN) == 0) {
+  #ifndef DEBUG
+  if(!showQR) {
+    display.setTextAlignment(TEXT_ALIGN_CENTER);
+    display.clear();
+    display.drawString(64, 12, drinkStatus);
+    display.drawString(64, 30, "Mode: " + modeNames[modeState]);
+    display.display();
+  }
+  #endif
+
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (digitalRead(MODE_BUTTON_PIN) == 0) {
+      if(timerState == TIMER_STOPPED) {
+        timerState = WAITING_FOR_THRESHOLD;
+        animationState = ANIMATION_IDLE;
+        canSwitchMode = true;
+        lastDebounceTime = millis();
+        showQR = false;
+      }else if(canSwitchMode){
         lastDebounceTime = millis();  //set the current time
         modeState += 1;
         animationStarted = millis();
         animationState = ANIMATION_MODUS_STATE;
+        showQR = false;
       }
     }
   }
-  if (modeState > numberOfModes - 1) {
+  if (modeState > NUMBER_OF_MODES - 1) {
     modeState = 0;
-  }
-
-  switch (modeState) {
-    case BEER:
-      typeOfDrink = "Drink: Beer";
-      break;
-    case SHOT:
-      typeOfDrink = "Drink: Shot";
-      break;
-    case WATER:
-      typeOfDrink = "Drink: Water";
-      break;
   }
 
   switch (timerState) {
     case BOOTING:
-      pressButton = true;
+      canSwitchMode = true;
       if (millis() > BOOT_TIME) {
         timerState = WAITING_FOR_THRESHOLD;
         animationState = ANIMATION_IDLE;
@@ -234,57 +252,80 @@ void loop() {
       break;
     case TIMER_RUNNING:
       timeElapsed = millis() - timerStartedMs;
-      encodeMsToTimer(timeElapsed);
-      drinkStatus = "Waiting for drink";
-      pressButton = false;
+      if(timeElapsed > MINIMUM_TIME) encodeMsToTimer(timeElapsed);
       break;
   }
 
   if (loadCell.is_ready()) {
     int weightValue = loadCell.get_value(1);
+    #ifdef DEBUG
+    display.clear();
+    display.setTextAlignment(TEXT_ALIGN_LEFT);
+    display.drawString(0, 6, String(weightValue));
+    display.display();
+    #endif
+
+    if(!digitalRead(MODE_BUTTON_PIN)) {
+      if(millis() - calibrateTimer > CALIBRATE_VALUE_TIME + debounceDelay) {
+        calibrateTimer = millis();
+      }else if(millis() - calibrateTimer > CALIBRATE_VALUE_TIME) {
+        EEPROM.put(0, weightValue);
+        EEPROM.commit();
+        calibratedWeightValue = weightValue;
+        timerState = WAITING_FOR_THRESHOLD;
+        animationState = ANIMATION_IDLE;
+        canSwitchMode = true;
+      }
+    }
 
     //becomes true if something is detected on the load cell (the weight is above the threshold)
-    bool thresholdMet = abs(weightValue) > abs(LOAD_CELL_CALIBRATED_VALUE) + LOAD_CELL_THRESHOLD || abs(weightValue) < abs(LOAD_CELL_CALIBRATED_VALUE) - LOAD_CELL_THRESHOLD;
+    bool thresholdMet = abs(weightValue) > abs(calibratedWeightValue) + LOAD_CELL_THRESHOLD || abs(weightValue) < abs(calibratedWeightValue) - LOAD_CELL_THRESHOLD;
 
     switch (timerState) {
       case WAITING_FOR_THRESHOLD:
-        if (thresholdMet) {
-          pressButton = false;
+        if (thresholdMet && millis() - lastDebounceTime > debounceDelay * 3) {
+          canSwitchMode = false;
           timerState = THRESHOLD_REACHED;
           animationState = ANIMATION_TIMER_PRIMED;
+          animationStarted = millis();
           encodeMsToTimer(0);
           drinkStatus = "Ready?";
+          showQR = false;
         }
         break;
       case THRESHOLD_REACHED:
         if (!thresholdMet) {
           timerState = TIMER_RUNNING;
           timerStartedMs = millis();
-          animationState = ANIMATION_TIMER_RUNNING;
-          drinkStatus = "Go!";
+          canSwitchMode = false;
         }
         break;
       case TIMER_RUNNING:
-        if (thresholdMet) {
-          timerState = TIMER_STOPPED;
-          animationState = ANIMATION_IDLE;
-          drinkStatus = "DONE!";
+        if(millis() - timerStartedMs >= MINIMUM_TIME) {
+          animationState = ANIMATION_TIMER_RUNNING;
+          drinkStatus = "Go!";
         }
-        break;
-      case TIMER_STOPPED:
-        pressButton = true;
-        if (!thresholdMet) {
-          timerState = WAITING_FOR_THRESHOLD;
-          char buf[20];
-          itoa(timeElapsed, buf, 10);
-          char secret[10];
-          generateRandomDigits(secret, 10);
-          for(int i = 1; i < 10; i++) {
-            secrets[i] = secrets[i - 1];
+        if (thresholdMet) {
+          if(millis() - timerStartedMs < MINIMUM_TIME) {
+            timerState = THRESHOLD_REACHED;
+          }else{
+            timerState = TIMER_STOPPED;
+            animationState = ANIMATION_TIMER_STOPPED;
+            animationStarted = millis();
+            drinkStatus = "Waiting for drink";
+            if(leaderboardEnabled) {
+              char buf[20];
+              itoa(timeElapsed, buf, 10);
+              char secret[10];
+              generateRandomDigits(secret, 10);
+              for(int i = 1; i < 10; i++) {
+                secrets[i] = secrets[i - 1];
+              }
+              secrets[0] = String(secret);
+              qrcode.create("http://4.3.2.1?t=" + String(buf) + "&s=" + secrets[0]);
+              showQR = true;
+            }
           }
-          secrets[0] = String(secret);
-          qrcode.create("http://4.3.2.1?t=" + String(buf) + "&s=" + secrets[0]);
-          drinkStatus = "Waiting for drink";
         }
         break;
     }
@@ -302,12 +343,7 @@ void loop() {
       }
     case ANIMATION_BOOT:
       {
-        //fade in and out the green LED ring
-        unsigned long currentTime = millis();
-        int fadeValue = 255 - (float)(abs((int)currentTime % 1000 - 500) / 500.0 * 255);
-        fill_solid(ringLeds, NUM_LEDS, CRGB::Green);
-        fadeToBlackBy(ringLeds, NUM_LEDS, fadeValue);
-        FastLED.show();
+        bootAnimation();
         break;
       }
     case ANIMATION_IDLE:
@@ -316,10 +352,18 @@ void loop() {
         break;
       }
     case ANIMATION_TIMER_PRIMED:
-      break;
+      {
+        timerPrimedAnimation();
+        break;
+      }
     case ANIMATION_TIMER_RUNNING:
       {
-        glassDetectedRingAnimation();
+        timerRunningAnimation();
+        break;
+      }
+    case ANIMATION_TIMER_STOPPED:
+      {
+        timerStoppedAnimation();
         break;
       }
   }
@@ -358,6 +402,16 @@ void generateRandomDigits(char* buf, int l) {
   }
 }
 
+void bootAnimation() {
+  //fade in and out the green LED ring
+  FastLED.clear();
+  unsigned long currentTime = millis();
+  int fadeValue = 255 - (float)(abs((int)currentTime % 1000 - 500) / 500.0 * 255);
+  fill_solid(ringLeds, NUM_LEDS, CRGB::Green);
+  fadeToBlackBy(ringLeds, NUM_LEDS, fadeValue);
+  FastLED.show();
+}
+
 void idleRingAnimation() {
   //show a snake of x LEDs going round with a certain speed
   FastLED.clear();
@@ -367,14 +421,26 @@ void idleRingAnimation() {
   int currentPosition = (currentTime / (1000 / snakeSpeed)) % NUM_LEDS;
   for (int i = 0; i < trailLeds; i++) {
     int led = (currentPosition - i + NUM_LEDS) % NUM_LEDS;
-    ringLeds[led] = CHSV(currentTime / 15 % 255, 255, 255);
+    ringLeds[led] = modeColors[modeState];
     byte fade = map(i, 0, trailLeds, 0, 255);
     ringLeds[led].fadeToBlackBy(fade);
   }
   FastLED.show();
 }
 
-void glassDetectedRingAnimation() {
+void timerPrimedAnimation() {
+  //pulsing animation with a set speed
+  int pulseDuration = 300;
+
+  FastLED.clear();
+  unsigned long time = millis() - animationStarted;
+  uint8_t brightness = (int)((float)(time % pulseDuration) / (float)pulseDuration * 255.0);
+  fill_solid(ringLeds, NUM_LEDS, modeColors[modeState]);
+  fadeToBlackBy(ringLeds, NUM_LEDS, 255 - brightness);
+  FastLED.show();
+}
+
+void timerRunningAnimation() {
   // Check if it's time to update the animation
   unsigned long currentMillisDrinking = millis();
   if (currentMillisDrinking - previousMillisDrinking >= intervalDrinking) {
@@ -389,6 +455,29 @@ void glassDetectedRingAnimation() {
     // Show the updated LED array
     FastLED.show();
   }
+}
+
+void timerStoppedAnimation() {
+  //a fast-fading WHOOSH that then fades out
+
+  int rampUpTime = 100;
+  int fadeOutTime = 400;
+
+  FastLED.clear();
+  unsigned long time = millis() - animationStarted;
+  uint8_t brightness;
+  if(time <= rampUpTime) {
+    brightness = map(time, 0, rampUpTime, 0, 255);
+  }else if(time <= rampUpTime + fadeOutTime){
+    brightness = 255 - map(time, rampUpTime, rampUpTime + fadeOutTime, 0, 255);
+  }else{
+    brightness = 0;
+  }
+  
+  fill_solid(ringLeds, NUM_LEDS, modeColors[modeState]);
+  fadeToBlackBy(ringLeds, NUM_LEDS, 255 - brightness);
+
+  FastLED.show();
 }
 
 void modusSwitch() {
