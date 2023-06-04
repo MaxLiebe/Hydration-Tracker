@@ -4,14 +4,23 @@
 #include <TM1637Display.h>
 #include <Wire.h>
 #include <SSD1306.h>
+#include <qrcodeoled.h>
+#include <WiFi.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include "FS.h"
+#include "SD.h"
+#include "SPI.h"
+
 #include "fonts.h"
 #include "logo.h"
 
 //SCREEN
 #define SCREEN_ADDRESS 0x3C
-#define OLED_SDA 13  //M16 A13
-#define OLED_SCK 14  //M17 A14
-SSD1306 display(SCREEN_ADDRESS, OLED_SDA, OLED_SCK);
+#define OLED_SDA 16
+#define OLED_SCK 17
+SSD1306 display(SCREEN_ADDRESS, OLED_SDA, OLED_SCK, GEOMETRY_128_64);
+QRcodeOled qrcode(&display);
 
 //LED RING
 #define RING_DATA_PIN 18  //M14 A18
@@ -23,9 +32,12 @@ SSD1306 display(SCREEN_ADDRESS, OLED_SDA, OLED_SCK);
 CRGB ringLeds[NUM_LEDS];
 
 //LOAD CELL
-#define HX711_SCK 36  //M5 A36
-#define HX711_DT 38   //M3 A38
-#define LOAD_CELL_THRESHOLD 17000
+#define HX711_SCK 5
+#define HX711_DT 3
+//#define LOAD_CELL_CALIBRATED_VALUE -397700 //to get this value, read the value of the load cell when nothing is on it using the debug code below (lid needs to be screwed in)
+#define LOAD_CELL_CALIBRATED_VALUE -374700 //lower value for testing when the lid is not on
+//#define LOAD_CELL_THRESHOLD 17000 //can be calibrated yourself. we'd recommend leaving it at this value
+#define LOAD_CELL_THRESHOLD 50000 //different value for testing when the lid is not on
 HX711 loadCell;
 
 //TIMER
@@ -33,6 +45,14 @@ HX711 loadCell;
 #define TIMER_DIO 39  //M1 A39
 TM1637Display timer(TIMER_CLK, TIMER_DIO);
 uint8_t TIMER_BLANK[4];
+
+//SD Card
+#define SD_CS_PIN        12
+#define SD_CLK_PIN       11
+#define SD_MOSI_PIN      9
+#define SD_MISO_PIN      7
+#define SD_FREQ          80000000
+SPIClass spi = SPIClass(HSPI);
 
 //MODE BUTTON
 #define MODE_BUTTON_PIN 1  //M34 A1
@@ -71,12 +91,25 @@ uint8_t TIMER_BLANK[4];
 #define SHOT 1
 #define WATER 2
 
+//WIFI CREDENTIALS FOR LEADERBOARD
+const char* ssid = "HydrationTracker";
+const char* password = "drinkwater";
+
+//WIFI SERVER
+AsyncWebServer server(80);
+String header;
+
 //VARIABLES
 unsigned long timerStartedMs = 0;
+unsigned long timeElapsed = 0;
 unsigned long animationStarted = 0;
 int timerState = BOOTING;
 int modeState = BEER;
 int animationState = ANIMATION_BOOT;
+bool leaderboardEnabled = true;
+
+String secrets[10];
+
 int numberOfModes = NUMBER_OF_MODES;
 bool pulseActive = true;
 String typeOfDrink = "beer";
@@ -96,7 +129,6 @@ unsigned long intervalDrinking = ANIMATION_SPEED_DRINKING;
 
 void setup() {
   Serial.begin(9600);
-
   //initialize the LED ring with FastLED, and turn off all the LEDs
   FastLED.addLeds<LED_TYPE, RING_DATA_PIN, COLOR_ORDER>(ringLeds, NUM_LEDS).setCorrection(TypicalLEDStrip);
   FastLED.setBrightness(BRIGHTNESS);
@@ -118,12 +150,38 @@ void setup() {
   display.setColor(WHITE);
   display.setFont(Roboto_Black_14);
   display.init();
+  qrcode.init();
   display.clear();
 
   //show the splash screen
   display.drawXbm(0, 0, LOGO_WIDTH, LOGO_HEIGHT, LOGO_BITS);
   display.flipScreenVertically();
   display.display();
+
+  //setup sd card
+  spi.begin(SD_CLK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN); 
+  if (!SD.begin(SD_CS_PIN, spi, SD_FREQ)) {
+    //SD card initialisation failed, don't bother with setting up a wifi hotspot.
+    leaderboardEnabled = false;
+    return;
+  }
+
+  //setup wifi access point
+  WiFi.mode(WIFI_STA);
+  IPAddress Ip(4, 3, 2, 1);
+  IPAddress NMask(255, 255, 255, 0);
+  WiFi.softAPConfig(Ip, Ip, NMask);
+  WiFi.softAP(ssid, password);
+  IPAddress IP = WiFi.softAPIP();
+
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    //request->send(200, "text/plain", "Hello, world");
+    request->send(SD, "/index.html", "text/html");
+  });
+
+  server.serveStatic("/", SD, "/");
+  
+  server.begin();
 }
 
 void loop() {
@@ -164,14 +222,21 @@ void loop() {
       if (millis() > BOOT_TIME) {
         timerState = WAITING_FOR_THRESHOLD;
         animationState = ANIMATION_IDLE;
-        loadCell.tare();
-        drinkStatus = "Waiting for drink";
+        switch(SD.cardType()) {
+          case CARD_NONE: {
+            display.drawString(64, 50, "No SD card found");
+            leaderboardEnabled = false;
+            break;
+          }
+        }
+        display.display();
       }
       break;
     case TIMER_RUNNING:
+      timeElapsed = millis() - timerStartedMs;
+      encodeMsToTimer(timeElapsed);
+      drinkStatus = "Waiting for drink";
       pressButton = false;
-      unsigned long elapsed = millis() - timerStartedMs;
-      encodeMsToTimer(elapsed);
       break;
   }
 
@@ -179,7 +244,7 @@ void loop() {
     int weightValue = loadCell.get_value(1);
 
     //becomes true if something is detected on the load cell (the weight is above the threshold)
-    bool thresholdMet = abs(weightValue) > LOAD_CELL_THRESHOLD;
+    bool thresholdMet = abs(weightValue) > abs(LOAD_CELL_CALIBRATED_VALUE) + LOAD_CELL_THRESHOLD || abs(weightValue) < abs(LOAD_CELL_CALIBRATED_VALUE) - LOAD_CELL_THRESHOLD;
 
     switch (timerState) {
       case WAITING_FOR_THRESHOLD:
@@ -210,6 +275,15 @@ void loop() {
         pressButton = true;
         if (!thresholdMet) {
           timerState = WAITING_FOR_THRESHOLD;
+          char buf[20];
+          itoa(timeElapsed, buf, 10);
+          char secret[10];
+          generateRandomDigits(secret, 10);
+          for(int i = 1; i < 10; i++) {
+            secrets[i] = secrets[i - 1];
+          }
+          secrets[0] = String(secret);
+          qrcode.create("http://4.3.2.1?t=" + String(buf) + "&s=" + secrets[0]);
           drinkStatus = "Waiting for drink";
         }
         break;
@@ -274,6 +348,14 @@ void encodeMsToTimer(unsigned long ms) {
       break;
   }
   timer.setSegments(segments);
+}
+
+void generateRandomDigits(char* buf, int l) {
+  for(int i = 0; i < l; i++) {
+    byte randomValue = random(0, 10);
+    char letter = randomValue + '0';
+    buf[i] = letter;
+  }
 }
 
 void idleRingAnimation() {
