@@ -1,6 +1,6 @@
 var newTime;
 var secret;
-var leaderboard;
+var leaderboard = [];
 
 window.onload = async () => {
     (await fetch('leaderboards')).json().then(data => {
@@ -51,7 +51,7 @@ const saveTime = () => {
 
     //honestly don't care about the status of this
     fetch(`savetime?s=${secret}&n=${name}`);
-    
+
     //update the leaderboard locally without refreshing the page
     leaderboard.push(entry);
     sortLeaderboard();

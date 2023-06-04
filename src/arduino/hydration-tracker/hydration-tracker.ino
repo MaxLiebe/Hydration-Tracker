@@ -227,7 +227,7 @@ void loop() {
           char buf[20];
           itoa(timeElapsed, buf, 10);
           char secret[10];
-          generateRandomSecret(secret, 10);
+          generateRandomDigits(secret, 10);
           for(int i = 1; i < 10; i++) {
             secrets[i] = secrets[i - 1];
           }
@@ -287,13 +287,10 @@ void encodeMsToTimer(unsigned long ms) {
   timer.setSegments(segments);
 }
 
-void generateRandomSecret(char* buf, int l) {
+void generateRandomDigits(char* buf, int l) {
   for(int i = 0; i < l; i++) {
-    byte randomValue = random(0, 37);
-    char letter = randomValue + 'a';
-    if(randomValue > 26) {
-      letter = (randomValue - 26) + '0';
-    }
+    byte randomValue = random(0, 10);
+    char letter = randomValue + '0';
     buf[i] = letter;
   }
 }
