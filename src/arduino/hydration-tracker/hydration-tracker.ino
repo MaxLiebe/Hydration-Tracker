@@ -8,6 +8,7 @@
 #include <WiFi.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
+#include "DNSServer.h"
 #include "FS.h"
 #include "SD.h"
 #include "SPI.h"
@@ -38,9 +39,8 @@ CRGB ringLeds[NUM_LEDS];
 //LOAD CELL
 #define HX711_SCK 5
 #define HX711_DT 3
-#define LOAD_CELL_THRESHOLD 10000 //can be calibrated yourself. we'd recommend leaving it at this value
-// #define LOAD_CELL_THRESHOLD 50000 //different value for testing when the lid is not on
-#define CALIBRATE_VALUE_TIME 2000
+#define LOAD_CELL_THRESHOLD 50000 //can be calibrated yourself. we'd recommend leaving it at this value
+#define LOAD_CELL_CALIBRATED_VALUE -330000 //same as above
 HX711 loadCell;
 
 //TIMER
@@ -106,10 +106,12 @@ const uint32_t modeColors[NUMBER_OF_MODES] = {
 
 //WIFI CREDENTIALS FOR LEADERBOARD
 const char* ssid = "HydrationTracker";
-const char* password = "drinkwater";
+const char* password = ""; //optional, more effort for drunk people tho
+#define LOCAL_IP_URL "http://4.3.2.1"
 
 //WIFI SERVER
 AsyncWebServer server(80);
+DNSServer dnsServer;
 String header;
 
 //VARIABLES
@@ -138,9 +140,6 @@ int8_t pulsationDirectionDrinking = 1;
 // Define variables for timing
 unsigned long previousMillisDrinking = 0;
 unsigned long intervalDrinking = ANIMATION_SPEED_DRINKING;
-
-long calibratedWeightValue = 0;
-unsigned long calibrateTimer = 0;
 
 void setup() {
   Serial.begin(9600);
@@ -189,17 +188,20 @@ void setup() {
   WiFi.softAP(ssid, password);
   IPAddress IP = WiFi.softAPIP();
 
+  dnsServer.start(53, "*", IP);
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     //request->send(200, "text/plain", "Hello, world");
     request->send(SD, "/index.html", "text/html");
   });
-
+  server.on("/generate_204", [](AsyncWebServerRequest *request) { request->redirect(LOCAL_IP_URL); });
+  server.on("/redirect", [](AsyncWebServerRequest *request) { request->redirect(LOCAL_IP_URL); });			   // microsoft redirect
+	server.on("/hotspot-detect.html", [](AsyncWebServerRequest *request) { request->redirect(LOCAL_IP_URL); });  // apple call home
+	server.on("/canonical.html", [](AsyncWebServerRequest *request) { request->redirect(LOCAL_IP_URL); });	   // firefox captive portal call home
+	server.on("/success.txt", [](AsyncWebServerRequest *request) { request->send(200); });					   // firefox captive portal call home
+	server.on("/ncsi.txt", [](AsyncWebServerRequest *request) { request->redirect(LOCAL_IP_URL); });			   // windows call home
   server.serveStatic("/", SD, "/");
   
   server.begin();
-
-  EEPROM.begin(EEPROM_SIZE);
-  EEPROM.get(0, calibratedWeightValue);
 }
 
 void loop() {
@@ -265,26 +267,14 @@ void loop() {
     display.display();
     #endif
 
-    if(!digitalRead(MODE_BUTTON_PIN)) {
-      if(millis() - calibrateTimer > CALIBRATE_VALUE_TIME + debounceDelay) {
-        calibrateTimer = millis();
-      }else if(millis() - calibrateTimer > CALIBRATE_VALUE_TIME) {
-        EEPROM.put(0, weightValue);
-        EEPROM.commit();
-        calibratedWeightValue = weightValue;
-        timerState = WAITING_FOR_THRESHOLD;
-        animationState = ANIMATION_IDLE;
-        canSwitchMode = true;
-      }
-    }
-
     //becomes true if something is detected on the load cell (the weight is above the threshold)
-    bool thresholdMet = abs(weightValue) > abs(calibratedWeightValue) + LOAD_CELL_THRESHOLD || abs(weightValue) < abs(calibratedWeightValue) - LOAD_CELL_THRESHOLD;
+    bool thresholdMet = LOAD_CELL_CALIBRATED_VALUE - weightValue < -LOAD_CELL_THRESHOLD || LOAD_CELL_CALIBRATED_VALUE - weightValue > LOAD_CELL_THRESHOLD;
 
     switch (timerState) {
       case WAITING_FOR_THRESHOLD:
-        if (thresholdMet && millis() - lastDebounceTime > debounceDelay * 3) {
+        if (thresholdMet && millis() - lastDebounceTime > debounceDelay) {
           canSwitchMode = false;
+          lastDebounceTime = millis();
           timerState = THRESHOLD_REACHED;
           animationState = ANIMATION_TIMER_PRIMED;
           animationStarted = millis();
@@ -294,21 +284,17 @@ void loop() {
         }
         break;
       case THRESHOLD_REACHED:
-        if (!thresholdMet) {
+        if (!thresholdMet && millis() - lastDebounceTime > debounceDelay) {
           timerState = TIMER_RUNNING;
           timerStartedMs = millis();
           canSwitchMode = false;
-        }
-        break;
-      case TIMER_RUNNING:
-        if(millis() - timerStartedMs >= MINIMUM_TIME) {
           animationState = ANIMATION_TIMER_RUNNING;
           drinkStatus = "Go!";
         }
+        break;
+      case TIMER_RUNNING:
         if (thresholdMet) {
-          if(millis() - timerStartedMs < MINIMUM_TIME) {
-            timerState = THRESHOLD_REACHED;
-          }else{
+          if(millis() - timerStartedMs >= MINIMUM_TIME) {
             timerState = TIMER_STOPPED;
             animationState = ANIMATION_TIMER_STOPPED;
             animationStarted = millis();
@@ -367,6 +353,8 @@ void loop() {
         break;
       }
   }
+
+  dnsServer.processNextRequest(); 
 }
 
 void encodeMsToTimer(unsigned long ms) {
@@ -460,7 +448,7 @@ void timerRunningAnimation() {
 void timerStoppedAnimation() {
   //a fast-fading WHOOSH that then fades out
 
-  int rampUpTime = 100;
+  int rampUpTime = 200;
   int fadeOutTime = 400;
 
   FastLED.clear();
