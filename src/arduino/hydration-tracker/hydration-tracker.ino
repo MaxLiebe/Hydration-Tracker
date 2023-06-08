@@ -22,8 +22,8 @@
 
 //SCREEN
 #define SCREEN_ADDRESS 0x3C
-#define OLED_SDA 16
-#define OLED_SCK 17
+#define OLED_SDA 17
+#define OLED_SCK 16
 SSD1306 display(SCREEN_ADDRESS, OLED_SDA, OLED_SCK, GEOMETRY_128_64);
 QRcodeOled qrcode(&display);
 
@@ -39,7 +39,7 @@ CRGB ringLeds[NUM_LEDS];
 //LOAD CELL
 #define HX711_SCK 5
 #define HX711_DT 3
-#define LOAD_CELL_THRESHOLD 50000 //can be calibrated yourself. we'd recommend leaving it at this value
+#define LOAD_CELL_THRESHOLD 75000 //can be calibrated yourself. we'd recommend leaving it at this value
 #define LOAD_CELL_CALIBRATED_VALUE -330000 //same as above
 HX711 loadCell;
 
@@ -58,7 +58,7 @@ uint8_t TIMER_BLANK[4];
 SPIClass spi = SPIClass(HSPI);
 
 //MODE BUTTON
-#define MODE_BUTTON_PIN 34
+#define MODE_BUTTON_PIN 21
 
 //TIMER MODES
 #define SECONDS_HUNDREDTHS 0
@@ -122,8 +122,6 @@ int timerState = BOOTING;
 int modeState = 0;
 int animationState = ANIMATION_BOOT;
 bool leaderboardEnabled = true;
-
-String secrets[10];
 
 bool pulseActive = true;
 bool canSwitchMode = true;
@@ -293,22 +291,18 @@ void loop() {
         }
         break;
       case TIMER_RUNNING:
-        if (thresholdMet) {
+        if (thresholdMet) { 
           if(millis() - timerStartedMs >= MINIMUM_TIME) {
             timerState = TIMER_STOPPED;
             animationState = ANIMATION_TIMER_STOPPED;
             animationStarted = millis();
             drinkStatus = "Waiting for drink";
             if(leaderboardEnabled) {
-              char buf[20];
-              itoa(timeElapsed, buf, 10);
               char secret[10];
               generateRandomDigits(secret, 10);
-              for(int i = 1; i < 10; i++) {
-                secrets[i] = secrets[i - 1];
-              }
-              secrets[0] = String(secret);
-              qrcode.create("http://4.3.2.1?t=" + String(buf) + "&s=" + secrets[0]);
+              char url[100];
+              sprintf(url, "http://4.3.2.1?t=%i&s=%.10s", timeElapsed, secret);
+              qrcode.create(url);
               showQR = true;
             }
           }
